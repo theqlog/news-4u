@@ -22,21 +22,23 @@
     <section class="panel" aria-labelledby="pipeline-title">
       <div class="section-heading"><h2 id="pipeline-title">Article pipeline</h2><span class="pill">Live processing count unavailable</span></div>
       <p class="pipeline">RSS metadata <span aria-hidden="true">→</span> Download source <span aria-hidden="true">→</span> Extract content / image</p>
-      <p class="muted">Download and parsing run together. Awaiting extraction is a stored backlog, not a count of articles currently running.</p>
       <div id="backlog" class="backlog"></div>
-      <p class="muted">Counts reflect articles currently retained in the database, not lifetime ingestion. Missing content includes null, blank, and literal “None” values. Disabled extraction takes precedence over retry limits.</p>
+      <p id="fetch-issues" class="fetch-issues"></p>
+      <details class="explanation"><summary>How these counts work</summary><p class="muted">Download and parsing run together. Awaiting extraction is a stored backlog, not a count of articles currently running. Counts reflect articles currently retained in the database, not lifetime ingestion. Missing content includes null, blank, and literal “None” values. Disabled extraction takes precedence over retry limits.</p></details>
     </section>
 
-    <section class="panel" aria-labelledby="feeds-title">
+    <section class="panel feeds-panel" aria-labelledby="feeds-title">
       <div class="section-heading"><h2 id="feeds-title">RSS feeds</h2><span id="feed-count" class="muted"></span></div>
-      <p class="muted">Counts combine all RSS URLs in each feed. “Valid entries submitted” includes entries already stored as duplicates; it does not mean content was extracted.</p>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="RSS feed metrics, scroll horizontally for more columns">
+      <p class="muted feed-description">All RSS URLs are combined per feed. Expand details for URLs and fetch information.</p>
+      <div id="feed-cards" class="feed-cards"></div>
+      <div class="table-scroll desktop-feeds" tabindex="0" role="region" aria-label="RSS feed metrics, scroll horizontally for more columns">
         <table>
           <thead><tr><th scope="col">Feed / RSS URLs</th><th scope="col">Settings</th><th scope="col">Stored</th><th scope="col">With content</th><th scope="col">Missing</th><th scope="col">Awaiting</th><th scope="col">Disabled</th><th scope="col">Retry limit</th><th scope="col">Not eligible</th><th scope="col">Latest fetch</th><th scope="col">Entries found</th><th scope="col">Valid entries submitted</th><th scope="col">Duration</th><th scope="col">Fetch error</th></tr></thead>
           <tbody id="feeds"></tbody>
         </table>
       </div>
       <p id="empty" class="empty" hidden>No RSS feeds configured yet.</p>
+      <details class="explanation"><summary>About fetch counts</summary><p class="muted">“Valid entries submitted” includes entries already stored as duplicates; it does not mean content was extracted.</p></details>
     </section>
 
     <section class="panel" aria-labelledby="scheduler-title">

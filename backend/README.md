@@ -38,6 +38,12 @@ Failed refreshes retain the previous snapshot and its timestamp. Times are displ
 in the browser's local timezone. The page and `GET /api/news/dashboard` follow the
 backend's existing unauthenticated access model.
 
+Below 1024px, feeds appear as cards with stored/content/missing counts and the latest
+fetch status. **Feed details** expands URLs, extraction counts, fetch metrics, and
+full error text. Expanded feed details and keyboard focus survive refreshes. Phones
+use a two-column summary grid; desktop retains the detailed feed table, with URLs
+and full fetch errors available through disclosures.
+
 The dashboard includes every configured feed, its RSS URLs and settings, stored
 article counts, latest fetch results, and scheduler configuration/running status
 with next run times. A feed's URLs are combined because existing articles and fetch

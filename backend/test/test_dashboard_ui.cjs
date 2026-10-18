@@ -8,11 +8,20 @@ const path = require("node:path");
 const source = fs.readFileSync(path.join(__dirname, "../dashboard/app.js"), "utf8");
 
 class Node {
-  constructor(tag) { this.tag = tag; this.children = []; this.events = {}; this.checked = true; this.hidden = false; }
+  constructor(tag) { this.tag = tag; this.children = []; this.events = {}; this.checked = true; this.hidden = false; this.open = false; }
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
   addEventListener(type, callback) { this.events[type] = callback; }
+  focus() { this.focused = true; }
   set innerHTML(value) { throw new Error("Unsafe HTML rendering"); }
+}
+
+function descendants(node) {
+  return [node, ...node.children.flatMap(descendants)];
+}
+
+function texts(node) {
+  return descendants(node).map((item) => item.textContent).filter(Boolean);
 }
 
 function fixture() {
@@ -31,17 +40,22 @@ function harness() {
   const requests = [];
   let tick;
   const get = (id) => {
+    for (const node of nodes.values()) {
+      const found = descendants(node).find((item) => item.id === id);
+      if (found) return found;
+    }
     if (!nodes.has(id)) nodes.set(id, new Node("div"));
     return nodes.get(id);
   };
+  const document = { getElementById: get, createElement: (tag) => new Node(tag), activeElement: null };
   vm.runInNewContext(source, {
-    document: { getElementById: get, createElement: (tag) => new Node(tag) },
+    document,
     Intl, Date, AbortSignal,
     fetch: (url, options) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })),
     setInterval: (fn, delay) => { assert.equal(delay, 30000); tick = fn; },
   });
   return {
-    get, requests, tick: () => tick(), click: () => get("refresh").events.click(),
+    get, requests, document, tick: () => tick(), click: () => get("refresh").events.click(),
     resolve: (index, body = fixture(), status = 200) => requests[index].resolve({ ok: status === 200, status, json: async () => body }),
   };
 }
@@ -103,8 +117,52 @@ test("feed names, URLs and errors render as literal text", async () => {
   const h = harness();
   h.resolve(0); await flush();
   const row = h.get("feeds").children[0];
-  assert.equal(row.children[0].children[0].textContent, fixture().feeds[0].name);
-  assert.equal(row.children[0].children[2].textContent, "javascript:alert(1)");
-  assert.equal(row.children.at(-1).textContent, "<script>alert(1)</script>");
-  assert.equal(row.children.at(-2).textContent, "0 ms");
+  for (const root of [row, h.get("feed-cards")]) {
+    const content = texts(root);
+    assert.ok(content.includes(fixture().feeds[0].name));
+    assert.ok(content.includes("javascript:alert(1)"));
+    assert.ok(content.includes("<script>alert(1)</script>"));
+    assert.ok(content.includes("0 ms"));
+    assert.ok(descendants(root).every((node) => !["script", "img", "a"].includes(node.tag)));
+  }
+});
+
+test("feed details and keyboard focus survive refresh in both layouts", async () => {
+  const h = harness();
+  h.resolve(0); await flush();
+  const mobileDetails = h.get("feed-mobile-1");
+  mobileDetails.open = true;
+  mobileDetails.events.toggle();
+  const desktopDetails = h.get("feed-desktop-1-urls");
+  desktopDetails.open = true;
+  desktopDetails.events.toggle();
+  h.document.activeElement = h.get("feed-mobile-1-summary");
+  h.tick(); h.resolve(1); await flush();
+  assert.notEqual(h.get("feed-mobile-1"), mobileDetails);
+  assert.equal(h.get("feed-mobile-1").open, true);
+  assert.equal(h.get("feed-desktop-1-urls").open, true);
+  assert.equal(h.get("feed-mobile-1-summary").focused, true);
+  const current = h.get("feed-mobile-1");
+  current.open = false;
+  current.events.toggle();
+  h.tick(); h.resolve(2); await flush();
+  assert.equal(h.get("feed-mobile-1").open, false);
+});
+
+test("mobile cards show backlog and fetch problems, with complete secondary metrics", async () => {
+  const h = harness();
+  h.resolve(0); await flush();
+  const card = h.get("feed-cards").children[0];
+  assert.match(card.className, /has-error/);
+  assert.match(h.get("fetch-issues").textContent, /1 feed has a fetch error/);
+  const content = texts(card);
+  for (const label of ["Stored", "With content", "Missing", "Fetch error", "Awaiting extraction", "Retry limit reached", "Extraction disabled", "Not eligible", "Valid entries submitted", "RSS URLs", "Full fetch error"]) {
+    assert.ok(content.includes(label), label);
+  }
+  const data = fixture();
+  data.feeds[0].latest_fetch = null;
+  h.tick(); h.resolve(1, data); await flush();
+  assert.match(h.get("feed-cards").children[0].className, /has-backlog/);
+  assert.ok(texts(h.get("feed-cards")).includes("Never fetched"));
+  assert.match(h.get("fetch-issues").textContent, /No fetch errors/);
 });
