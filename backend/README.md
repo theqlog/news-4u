@@ -79,7 +79,7 @@ test creates and removes its own isolated schema; the database user needs schema
 creation permission. Downloads and content parsing are mocked.
 
 ```bash
-DASHBOARD_TEST_DATABASE_URL='postgresql+psycopg2://user:password@localhost/test_db' \
+DASHBOARD_TEST_DATABASE_URL='postgresql+psycopg://user:password@localhost/test_db' \
   PYTHONPATH=backend python -m unittest discover -s backend/test -p test_dashboard.py
 PYTHONPATH=backend python -m unittest discover -s backend/test -p test_rss_multi_url.py
 node --test backend/test/test_dashboard_ui.cjs

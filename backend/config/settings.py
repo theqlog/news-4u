@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     @property
     def DATABASE_URL(self):
-        # Match the psycopg2 driver installed by requirements.txt explicitly.
-        return f"postgresql+psycopg2://{self.DB_USER}:{self.DB_PASS}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+        # Select Psycopg 3 explicitly; plain postgresql:// defaults to psycopg2.
+        return f"postgresql+psycopg://{self.DB_USER}:{self.DB_PASS}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
 settings = Settings()
