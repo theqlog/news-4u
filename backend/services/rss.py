@@ -70,54 +70,55 @@ class RSSService:
             self.db.commit()
 
 
-        feed_url = feed.url
-        try:
-            response = await self._fetch_with_retry(feed_url)
-            logger.debug(f"Fetched feed URL successfully: {feed_url}")
+        articles_found = 0
+        articles_processed = 0
+        errors = []
+        successful_urls = 0
+        seen_links = set()
+        for feed_url in dict.fromkeys(feed.url):
+            try:
+                response = await self._fetch_with_retry(feed_url)
+                loop = asyncio.get_running_loop()
+                parsed_feed = await loop.run_in_executor(None, feedparser.parse, response.text)
+                if parsed_feed.bozo and not parsed_feed.entries:
+                    raise ValueError(f"Invalid RSS feed: {parsed_feed.get('bozo_exception', 'parse error')}")
+                articles_found += len(parsed_feed.entries)
+                entries = []
+                for entry in parsed_feed.entries:
+                    link = self._safe_get_string(entry, 'link')
+                    if link and link in seen_links:
+                        continue
+                    entries.append(entry)
+                articles_processed += await self._process_articles(entries, feed)
+                seen_links.update(self._safe_get_string(entry, "link") for entry in entries)
+                successful_urls += 1
+            except Exception as exc:
+                logger.exception("Error fetching %s for %s", feed_url, feed.name)
+                if self.db is not None:
+                    self.db.rollback()
+                errors.append(f"{feed_url}: {exc}")
 
-            # Run feedparser.parse in executor to avoid blocking event loop
-            loop = asyncio.get_event_loop()
-            parsed_feed = await loop.run_in_executor(
-                None,
-                feedparser.parse,
-                response.text
-            )
-            articles_found = len(parsed_feed.entries)
-            logger.info(f'Found {articles_found} articles from {feed.name}')
-            
-            articles_processed = await self._process_articles(parsed_feed.entries, feed)
-            
-            execution_time = int((time.time() - start_time) * 1000)
-            object.__setattr__(log_entry, 'status', 'success')  # type: ignore
-            object.__setattr__(log_entry, 'articles_found', articles_found)  # type: ignore
-            object.__setattr__(log_entry, 'articles_processed', articles_processed)  # type: ignore
-            object.__setattr__(log_entry, 'execution_time', execution_time)  # type: ignore
-            
-            if self.db is not None:
-                self.db.commit()
-            
-            return {
-                "status": "success",
-                "articles_found": articles_found,
-                "articles_processed": articles_processed,
-                "execution_time": execution_time
-            }
-            
-        except Exception as e:
-            logger.error(f"Async Error fetching feed {feed.name}: {e}")
-            execution_time = int((time.time() - start_time) * 1000)
-            object.__setattr__(log_entry, 'status', 'error')  # type: ignore
-            object.__setattr__(log_entry, 'error_message', str(e))  # type: ignore
-            object.__setattr__(log_entry, 'execution_time', execution_time)  # type: ignore
-            if self.db is not None:
-                self.db.commit()
-            
-            return {
-                "status": "error",
-                "error": str(e),
-                "execution_time": execution_time
-            }
-    
+        status = FeedFetchStatus.SUCCESS
+        if errors:
+            status = FeedFetchStatus.PARTIAL if successful_urls else FeedFetchStatus.ERROR
+        execution_time = int((time.time() - start_time) * 1000)
+        log_entry.status = status
+        log_entry.articles_found = articles_found
+        log_entry.articles_processed = articles_processed
+        log_entry.execution_time_ms = execution_time
+        log_entry.error_message = "; ".join(errors) if errors else None
+        if self.db is not None:
+            self.db.commit()
+        result = {
+            "status": status,
+            "articles_found": articles_found,
+            "articles_processed": articles_processed,
+            "execution_time": execution_time,
+        }
+        if errors:
+            result["error"] = "; ".join(errors)
+        return result
+
     async def fetch_all_feeds(self) -> Dict:
         """Fetch all active feeds in parallel."""
         if self.db is None:
@@ -159,12 +160,19 @@ class RSSService:
                     **result
                 })
 
-                if result.get("status") == FeedFetchStatus.SUCCESS:
+                if result.get("status") in (FeedFetchStatus.SUCCESS, FeedFetchStatus.PARTIAL):
                     total_articles_found += result.get("articles_found", 0)
                     total_articles_processed += result.get("articles_processed", 0)
 
+        statuses = [result["status"] for result in results]
+        overall_status = FeedFetchStatus.SUCCESS
+        if any(status != FeedFetchStatus.SUCCESS for status in statuses):
+            overall_status = (
+                FeedFetchStatus.ERROR if all(status == FeedFetchStatus.ERROR for status in statuses)
+                else FeedFetchStatus.PARTIAL
+            )
         return {
-            "status": FeedFetchStatus.SUCCESS,
+            "status": overall_status,
             "feeds_processed": len(feeds),
             "total_articles_found": total_articles_found,
             "total_articles_processed": total_articles_processed,
@@ -306,7 +314,7 @@ class RSSService:
         
         raise Exception(f"Failed to fetch {url} and all fallbacks after {max_retries} attempts each")
     
-    async def _process_articles(self, entries: List, feed: RSSFeed) -> int:
+    async def _process_articles(self, entries: List, feed: RSSFeedModel) -> int:
         """
         Process RSS feed entries into news articles (metadata only, no content extraction).
         """
@@ -333,7 +341,7 @@ class RSSService:
         
         return len(articles_to_add)
 
-    def _build_article_object(self, entry: Dict[str, Any], feed: RSSFeed) -> Optional[NewsArticle]:
+    def _build_article_object(self, entry: Dict[str, Any], feed: RSSFeedModel) -> Optional[NewsArticle]:
         title = self._safe_get_string(entry, 'title')
         link = self._safe_get_string(entry, 'link')
         if not link or not title:
@@ -345,7 +353,7 @@ class RSSService:
             "link": link,
             "author": self._safe_get_string(entry, 'author'),
             "published_date": self._extract_published_date(entry),
-            "source_name": feed.name,
+            "category": feed.category,
             "image_url": self._extract_image(entry),
             "slug": get_or_build_slug(link, title),
             "feed_id": feed.id,

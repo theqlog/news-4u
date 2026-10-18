@@ -2,14 +2,23 @@
 Pydantic schemas for API request/response models.
 """
 
-from pydantic import BaseModel, HttpUrl
-from typing import Optional, List
+from pydantic import BaseModel, HttpUrl, Field, AfterValidator
+from typing import Optional, List, Annotated
 from datetime import datetime
+
+
+def validate_feed_urls(urls: List[str]) -> List[str]:
+    for url in urls:
+        HttpUrl(url)
+    return list(dict.fromkeys(urls))
+
+
+FeedURLs = Annotated[List[str], Field(min_length=1), AfterValidator(validate_feed_urls)]
 
 
 class RSSFeedBase(BaseModel):
     name: str
-    url: str
+    url: FeedURLs
     category: Optional[str] = None
 
 
@@ -19,7 +28,7 @@ class RSSFeedCreate(RSSFeedBase):
 
 class RSSFeedUpdate(BaseModel):
     name: Optional[str] = None
-    url: Optional[str] = None
+    url: Optional[FeedURLs] = None
     category: Optional[str] = None
     is_active: Optional[bool] = None
     skip_extraction: Optional[bool] = None

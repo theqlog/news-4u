@@ -14,6 +14,7 @@ from schemas import (
     NewsArticleList,
     NewsArticleResponse,
     RSSFeedResponse,
+    RSSFeedUpdate,
 )
 from schemas import RSSFeedCreate
 from services.rss import RSSService
@@ -78,6 +79,7 @@ async def get_feeds_status(db: Session = Depends(get_db)):
     for feed, latest_log in results:
         feed_status.append({
             "name": feed.name,
+            "url": feed.url,
             "category": feed.category,
             "is_active": feed.is_active,
             "last_fetch": latest_log.fetch_timestamp if latest_log else None,
@@ -138,6 +140,22 @@ async def add_feed(feed: RSSFeedCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_feed)
     return {"message": f"Feed {feed.name} added successfully"}
+
+
+@router.patch("/feeds/{feed_name}", response_model=RSSFeedResponse, tags=["Feed"])
+async def update_feed(feed_name: str, changes: RSSFeedUpdate, db: Session = Depends(get_db)):
+    feed = db.query(RSSFeed).filter(RSSFeed.name == feed_name).first()
+    if feed is None:
+        raise HTTPException(status_code=404, detail="Feed not found")
+    updates = changes.model_dump(exclude_unset=True)
+    for field in ("name", "url", "is_active", "skip_extraction"):
+        if field in updates and updates[field] is None:
+            raise HTTPException(status_code=422, detail=f"{field} cannot be null")
+    for field, value in updates.items():
+        setattr(feed, field, value)
+    db.commit()
+    db.refresh(feed)
+    return feed
 
 
 @router.post("/fetch", tags=["Feed"])
@@ -392,7 +410,7 @@ async def get_articles_by_category(
     per_page: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
-    """Get articles by specific category. Note: Category field is deprecated and will return no results."""
+    """Get articles by the category inherited from their source feed."""
     offset = (page - 1) * per_page
 
     # Only get articles from active feeds

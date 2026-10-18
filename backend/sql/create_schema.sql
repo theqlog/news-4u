@@ -20,9 +20,10 @@ DROP TABLE IF EXISTS rss_feeds CASCADE;
 CREATE TABLE rss_feeds (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL UNIQUE,
-    url VARCHAR(500) NOT NULL,
+    url TEXT[] NOT NULL CHECK (cardinality(url) > 0 AND array_position(url, NULL) IS NULL),
     category VARCHAR(50),
     is_active BOOLEAN DEFAULT TRUE NOT NULL,
+    skip_extraction BOOLEAN DEFAULT FALSE NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE
 );
@@ -30,7 +31,7 @@ CREATE TABLE rss_feeds (
 -- Add comment
 COMMENT ON TABLE rss_feeds IS 'RSS feed sources configuration';
 COMMENT ON COLUMN rss_feeds.name IS 'Unique feed name identifier';
-COMMENT ON COLUMN rss_feeds.url IS 'RSS feed URL';
+COMMENT ON COLUMN rss_feeds.url IS 'Non-empty list of RSS feed URLs';
 COMMENT ON COLUMN rss_feeds.category IS 'Feed category (technology, business, sports, etc.)';
 COMMENT ON COLUMN rss_feeds.is_active IS 'Whether this feed is actively being fetched';
 

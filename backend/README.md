@@ -84,6 +84,32 @@ backend/
 
 The backend uses PostgreSQL. See [DATABASE_SETUP.md](DATABASE_SETUP.md) for detailed setup instructions.
 
+### Clean up articles older than one month
+
+From the repository root, preview the number of articles eligible for deletion:
+
+```bash
+docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < backend/sql/cleanup_old_articles.sql
+```
+
+Delete the matching articles:
+
+```bash
+docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" --set=apply=true' < backend/sql/cleanup_old_articles.sql
+```
+
+For production, use `docker compose -f docker-compose.prod.yml` in these commands.
+Without Docker, run `psql --file=backend/sql/cleanup_old_articles.sql` with your
+connection options; add `--set=apply=true` to delete.
+
+The cutoff is one calendar month before the run time in UTC, using `published_date`
+and falling back to `created_at` when publication date is missing. Articles exactly
+at the cutoff or with both dates missing are retained. This permanently deletes
+matching article rows, including their content; feeds and fetch logs are retained.
+The script runs in a transaction and stops on errors. Preview mode changes no data.
+To automate cleanup, schedule the delete command daily with cron, using absolute
+paths for the Compose file and SQL file.
+
 ### Python Shell Access
 
 For advanced database operations:
@@ -493,7 +519,9 @@ Stores RSS feed fetch operation logs.
 RSS feeds are configured in `config/rss_feeds.py`. You can easily add, update, or remove feeds by modifying the `RSS_FEEDS` dictionary.
 
 ### Environment Variables
-- `DATABASE_URL`: Database connection string (optional, defaults to SQLite)
+- `DB_USER`, `DB_PASS`, `DB_NAME`: Required PostgreSQL credentials and database name.
+- `DB_HOST`: PostgreSQL host (defaults to `localhost`; Compose uses `postgres`).
+- `DB_PORT`: PostgreSQL port (defaults to `5432`).
 
 ---
 
@@ -548,4 +576,4 @@ Once the server is running, you can access:
 - **Swagger UI**: http://localhost:8000/docs
 - **ReDoc**: http://localhost:8000/redoc
 
-These provide interactive API documentation with the ability to test endpoints directly. 
+These provide interactive API documentation with the ability to test endpoints directly.

@@ -86,7 +86,7 @@ export default function FeedManager({ selectedFeeds, onFeedSelectionApply }: Fee
       setAdding(true);
       await newsApi.addFeed({
         name: feedName,
-        url: feedUrl,
+        url: feedUrl.split(/[\s,]+/).filter(Boolean),
         category: feedCategory
       });
       
@@ -183,13 +183,13 @@ export default function FeedManager({ selectedFeeds, onFeedSelectionApply }: Fee
             <div className="text-xs text-gray-500 dark:text-gray-400 mb-3">
               Selected feeds will be used to filter articles
             </div>
-            <button
+            {/* <button
               onClick={() => setShowAddForm(!showAddForm)}
               className="w-full flex items-center justify-center space-x-2 px-3 py-2 text-sm font-medium text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800 rounded-md hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors"
             >
               <Plus className="h-4 w-4" />
               <span>Add New Feed</span>
-            </button>
+            </button> */}
           </div>
 
           {showAddForm && (
@@ -221,10 +221,10 @@ export default function FeedManager({ selectedFeeds, onFeedSelectionApply }: Fee
                     URL
                   </label>
                   <input
-                    type="url"
+                    type="text"
                     value={newFeed.url}
                     onChange={(e) => setNewFeed({ ...newFeed, url: e.target.value })}
-                    placeholder="https://example.com/rss"
+                    placeholder="RSS URLs separated by spaces or commas"
                     className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
                   />
                 </div>
@@ -244,13 +244,13 @@ export default function FeedManager({ selectedFeeds, onFeedSelectionApply }: Fee
                     ))}
                   </select>
                 </div>
-                <button
+                {/* <button
                   onClick={handleAddFeed}
                   disabled={adding || !newFeed.name.trim() || !newFeed.url.trim()}
                   className="w-full px-3 py-2 text-sm font-medium bg-primary-600 text-white rounded-md hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {adding ? 'Adding...' : 'Add Feed'}
-                </button>
+                </button> */}
               </div>
             </div>
           )}

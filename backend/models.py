@@ -3,6 +3,7 @@ Database models for RSS feeds and news articles.
 """
 
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Index
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -16,7 +17,7 @@ class RSSFeed(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     name = Column(String(255), nullable=False, unique=True)
-    url = Column(String(500), nullable=False)
+    url = Column(ARRAY(Text), nullable=False)
     category = Column(String(50), nullable=True)
     is_active = Column(Boolean, default=True)
     skip_extraction = Column(Boolean, default=False)

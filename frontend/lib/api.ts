@@ -62,7 +62,7 @@ export interface NewsArticleList {
 export interface RSSFeed {
   id: number;
   name: string;
-  url: string;
+  url: string[];
   category: string;
   description?: string;
   is_active: boolean;
@@ -99,7 +99,7 @@ export const newsApi = {
   // Add feed
   addFeed: async (feed: {
     name: string;
-    url: string;
+    url: string[];
     category: string;
   }): Promise<any> => {
     const response = await api.post('/api/news/feeds/add', feed);
