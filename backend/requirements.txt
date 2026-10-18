@@ -11,7 +11,7 @@ uvicorn==0.24.0
 uvloop==0.21.0
 watchfiles==1.1.0
 websockets==15.0.1
-psycopg2==2.9.11
+psycopg==3.3.6
 trafilatura==2.0.0
 google-genai==1.59.0
 curl-cffi>=0.7.0

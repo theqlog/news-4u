@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ingestion dashboard · News 4U</title>
+  <link rel="stylesheet" href="/dashboard/style.css">
+  <script src="/dashboard/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <div><p class="eyebrow">NEWS 4U / OPERATIONS</p><h1>Ingestion dashboard</h1>
+        <p class="subtitle">A snapshot of your feeds and article pipeline.</p></div>
+      <div class="controls"><label><input id="auto-refresh" type="checkbox" checked> Refresh every 30s</label>
+        <button id="refresh" type="button">Refresh now</button></div>
+    </header>
+    <div class="refresh-state"><span id="updated" role="status" aria-live="polite">Loading snapshot…</span>
+      <span id="error" role="alert" hidden></span></div>
+    <section aria-label="Article and feed totals" id="summary" class="cards"></section>
+
+    <section class="panel" aria-labelledby="pipeline-title">
+      <div class="section-heading"><h2 id="pipeline-title">Article pipeline</h2><span class="pill">Live processing count unavailable</span></div>
+      <p class="pipeline">RSS metadata <span aria-hidden="true">→</span> Download source <span aria-hidden="true">→</span> Extract content / image</p>
+      <p class="muted">Download and parsing run together. Awaiting extraction is a stored backlog, not a count of articles currently running.</p>
+      <div id="backlog" class="backlog"></div>
+      <p class="muted">Counts reflect articles currently retained in the database, not lifetime ingestion. Missing content includes null, blank, and literal “None” values. Disabled extraction takes precedence over retry limits.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="feeds-title">
+      <div class="section-heading"><h2 id="feeds-title">RSS feeds</h2><span id="feed-count" class="muted"></span></div>
+      <p class="muted">Counts combine all RSS URLs in each feed. “Valid entries submitted” includes entries already stored as duplicates; it does not mean content was extracted.</p>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="RSS feed metrics, scroll horizontally for more columns">
+        <table>
+          <thead><tr><th scope="col">Feed / RSS URLs</th><th scope="col">Settings</th><th scope="col">Stored</th><th scope="col">With content</th><th scope="col">Missing</th><th scope="col">Awaiting</th><th scope="col">Disabled</th><th scope="col">Retry limit</th><th scope="col">Not eligible</th><th scope="col">Latest fetch</th><th scope="col">Entries found</th><th scope="col">Valid entries submitted</th><th scope="col">Duration</th><th scope="col">Fetch error</th></tr></thead>
+          <tbody id="feeds"></tbody>
+        </table>
+      </div>
+      <p id="empty" class="empty" hidden>No RSS feeds configured yet.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="scheduler-title">
+      <div class="section-heading"><h2 id="scheduler-title">Scheduler</h2><span id="scheduler-state" class="pill">Loading…</span></div>
+      <div id="jobs" class="jobs"></div>
+      <p class="muted">RSS fetching runs every 15 minutes; scheduled extraction checks up to 30 articles every minute. Feed activation controls fetching; existing articles can still be extracted from inactive feeds.</p>
+    </section>
+    <footer>Read-only operations dashboard · <a href="/docs">API documentation</a></footer>
+  </main>
+</body>
+</html>

@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 
 from database import init_db, get_db
-from routers import news
+from routers import news, dashboard
 from services.scheduler_service import scheduler_service
 import logging
 from config.settings import settings
@@ -65,6 +65,7 @@ app.add_middleware(
 )
 
 app.include_router(news.router)
+app.include_router(dashboard.router)
 
 
 @app.get("/")
@@ -109,4 +110,4 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
         log_level="info"
-    ) 
+    )

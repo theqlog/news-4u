@@ -29,6 +29,65 @@ uvicorn main:app --reload
 
 The API will be available at http://localhost:8000
 
+## Ingestion dashboard
+
+Open `/dashboard` on the backend URL (for example, http://localhost:8000/dashboard).
+The read-only page is served entirely by FastAPI and refreshes every 30 seconds;
+the checkbox pauses automatic refresh and **Refresh now** requests a new snapshot.
+Failed refreshes retain the previous snapshot and its timestamp. Times are displayed
+in the browser's local timezone. The page and `GET /api/news/dashboard` follow the
+backend's existing unauthenticated access model.
+
+The dashboard includes every configured feed, its RSS URLs and settings, stored
+article counts, latest fetch results, and scheduler configuration/running status
+with next run times. A feed's URLs are combined because existing articles and fetch
+logs are attributed to the feed, not individual URLs. Latest fetch ties are resolved
+by log ID. Counts describe retained rows, so deleting old articles reduces totals.
+
+- **With extracted content:** content is present and nonblank, excluding the literal `None` sentinel.
+- **Missing content:** null, whitespace-only, or literal `None` content (after trimming).
+- **Awaiting extraction:** missing content, a valid feed with extraction enabled,
+  a nonblank link, and retries below `ARTICLE_EXTRACTION_MAX_RETRY`.
+- **Extraction disabled:** missing content on a feed with `skip_extraction` enabled.
+- **Retry limit reached:** missing content on an extraction-enabled feed with retries
+  at or above the limit. Disabled extraction takes precedence over retry limits.
+- **Not eligible:** remaining missing-content articles, such as missing feed associations
+  or blank links. Orphaned articles count toward global totals but have no feed row.
+- **Entries found:** RSS entries reported by the latest fetch, potentially including duplicates.
+- **Valid entries submitted:** the existing fetch-log `articles_processed` value;
+  valid entries submitted for insertion, including previously stored duplicates.
+  This is not an inserted-row count or a content-extraction count.
+
+The pipeline is **RSS metadata saved → source downloaded → content/image extracted**.
+Download and parsing form one extraction operation; the database does not retain a
+separate downloaded stage or live work counter. The page therefore reports **Live
+processing count unavailable**. Backlog counts must not be interpreted as live work.
+A fetch log with `starting` status may also be left over after an interrupted fetch.
+
+RSS fetching runs every 15 minutes. Extraction runs every minute, selecting the newest
+30 eligible articles. The scheduler uses attached ORM records and the same eligibility
+rules as the dashboard, persists each attempt, and advances retries exactly once for
+failed downloads, empty extraction, or parser exceptions. Blocking downloads/parsing
+run off the API event loop. Feed activation controls fetching; extraction of already
+stored articles from inactive feeds remains eligible. Dashboard refreshes never trigger
+fetching or extraction.
+
+### Dashboard verification
+
+Run the database integration suite against a disposable PostgreSQL database. Each
+test creates and removes its own isolated schema; the database user needs schema
+creation permission. Downloads and content parsing are mocked.
+
+```bash
+DASHBOARD_TEST_DATABASE_URL='postgresql+psycopg2://user:password@localhost/test_db' \
+  PYTHONPATH=backend python -m unittest discover -s backend/test -p test_dashboard.py
+PYTHONPATH=backend python -m unittest discover -s backend/test -p test_rss_multi_url.py
+node --test backend/test/test_dashboard_ui.cjs
+```
+
+The browser behavior tests use Node's built-in test runner without npm dependencies.
+Integration tests require the PostgreSQL driver selected in the test connection URL.
+
 ---
 
 ## Project Structure

@@ -106,3 +106,59 @@ class FeedFetchStatus(str):
     SUCCESS = "success"
     ERROR = "error"
     PARTIAL = "partial"
+
+
+class DashboardArticleCounts(BaseModel):
+    total: int = 0
+    with_content: int = 0
+    missing_content: int = 0
+    awaiting_extraction: int = 0
+    extraction_disabled: int = 0
+    retry_limit_reached: int = 0
+    not_eligible: int = 0
+
+
+class DashboardFetch(BaseModel):
+    timestamp: Optional[datetime]
+    status: str
+    entries_found: int
+    valid_entries_submitted: int
+    duration_ms: Optional[int]
+    error: Optional[str]
+
+
+class DashboardFeed(BaseModel):
+    id: int
+    name: str
+    urls: List[str]
+    category: Optional[str]
+    is_active: bool
+    skip_extraction: bool
+    articles: DashboardArticleCounts
+    latest_fetch: Optional[DashboardFetch] = None
+
+
+class DashboardJob(BaseModel):
+    id: str
+    name: str
+    next_run_time: Optional[datetime]
+    trigger: str
+
+
+class DashboardScheduler(BaseModel):
+    enabled: bool
+    scheduler_running: bool
+    jobs: List[DashboardJob]
+
+
+class DashboardSummary(DashboardArticleCounts):
+    total_feeds: int
+    active_feeds: int
+
+
+class DashboardResponse(BaseModel):
+    snapshot_at: datetime
+    summary: DashboardSummary
+    feeds: List[DashboardFeed]
+    scheduler: DashboardScheduler
+    live_processing_count: Optional[int] = None

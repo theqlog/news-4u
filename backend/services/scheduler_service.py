@@ -4,17 +4,15 @@ Scheduler service for managing cronjobs.
 
 import asyncio
 import logging
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy.orm import Session
-from sqlalchemy import text
 
 from database import get_db
 from services.rss import RSSService
 from services.extractors import Extractor
-from models import NewsArticle
+from models import NewsArticle, RSSFeed
+from services.processing import extraction_eligible_condition, has_content
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -46,7 +44,7 @@ class SchedulerService:
             logger.info("Scheduler stopped")
     
     def _add_feed_fetching_job(self):
-        """Add the job to fetch all feeds every 5 minutes."""
+        """Add the job to fetch all feeds every 15 minutes."""
         self.scheduler.add_job(
             func=self._fetch_all_feeds_job,
             trigger=CronTrigger(minute="*/15"),  # Every 15 minutes
@@ -89,20 +87,15 @@ class SchedulerService:
         try:
             db = next(get_db())
 
-            sql = text("""
-                SELECT * FROM news_articles n
-                JOIN rss_feeds r ON news_articles.feed_id = rss_feeds.id
-                WHERE n.content IS NULL OR n.content = '' OR n.content = 'None'
-                AND n.retry_count < :max_retry
-                AND n.link IS NOT NULL
-                AND r.skip_extraction = FALSE
-                ORDER BY created_at DESC
-                LIMIT 30
-            """)
+            articles_without_content = (
+                db.query(NewsArticle)
+                .join(RSSFeed, NewsArticle.feed_id == RSSFeed.id)
+                .filter(extraction_eligible_condition(settings.ARTICLE_EXTRACTION_MAX_RETRY))
+                .order_by(NewsArticle.created_at.desc(), NewsArticle.id.desc())
+                .limit(30)
+                .all()
+            )
 
-            params = {"max_retry": settings.ARTICLE_EXTRACTION_MAX_RETRY}
-            articles_without_content = db.execute(sql, params).all()
-            
             if not articles_without_content:
                 logger.info("No articles found that need content extraction")
                 return
@@ -113,34 +106,36 @@ class SchedulerService:
             extracted_count = 0
 
             for article in articles_without_content:
+                retry_before = article.retry_count or 0
+                succeeded = False
                 try:
-                    #  convert article from string to NewsArticle object
-                    article = NewsArticle(**article._mapping)
-                    print(f"Extracting content for article {article.id}: {article.title}")
                     logger.info(f"Extracting content for article {article.id}: {article.title}")
-                    content, extracted_image_url = extractor.extract(article)
-                    
-                    if content:
-                        setattr(article, 'content', content)
+                    # Downloads/parsing are synchronous; keep the API responsive
+                    # while waiting, with database work staying on this thread.
+                    content, extracted_image_url = await asyncio.to_thread(extractor.extract, article)
+                    if has_content(content):
+                        article.content = content
+                        succeeded = True
                         extracted_count += 1
-                        logger.info(f"Successfully extracted content for article {article.id}")
-                    
-                    if extracted_image_url and not getattr(article, 'image_url', None):
-                        setattr(article, 'image_url', extracted_image_url)
-                        logger.info(f"Updated image URL for article {article.id}")
-                    
-                    # Update the article timestamp
-                    setattr(article, 'updated_at', datetime.now())
-                    
-                except Exception as e:
-                    logger.error(f"Scheduler: Error extracting content for article {article.id}: {e}")
-                    continue
-            
-            # Commit all changes
-            db.commit()
+                    if extracted_image_url and not article.image_url:
+                        article.image_url = extracted_image_url
+                except Exception:
+                    logger.exception("Scheduler: Error extracting content for article %s", article.id)
+                finally:
+                    # Extractor may already increment retries for a download failure.
+                    # Assign from the pre-attempt value to count every failure once.
+                    if not succeeded:
+                        article.retry_count = retry_before + 1
+                    article.updated_at = datetime.now(timezone.utc)
+
+                # Keep completed attempts if a later article fails or the job stops.
+                db.commit()
+
             logger.info(f"Content extraction job completed. Extracted content for {extracted_count} articles")
             
         except Exception as e:
+            if 'db' in locals():
+                db.rollback()
             logger.error(f"Error in content extraction job: {e}")
         finally:
             if 'db' in locals():
@@ -164,4 +159,4 @@ class SchedulerService:
 
 
 # Global scheduler instance
-scheduler_service = SchedulerService() 
+scheduler_service = SchedulerService()
