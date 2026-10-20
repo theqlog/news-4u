@@ -2,9 +2,9 @@
 Pydantic schemas for API request/response models.
 """
 
-from pydantic import BaseModel, HttpUrl, Field, AfterValidator
+from pydantic import BaseModel, HttpUrl, Field, AfterValidator, StringConstraints
 from typing import Optional, List, Annotated
-from datetime import datetime
+from datetime import date, datetime
 
 
 def validate_feed_urls(urls: List[str]) -> List[str]:
@@ -136,6 +136,14 @@ class DashboardFeed(BaseModel):
     skip_extraction: bool
     articles: DashboardArticleCounts
     latest_fetch: Optional[DashboardFetch] = None
+    daily_articles: List[int] = Field(default_factory=list)
+
+
+class DashboardFeedInput(RSSFeedBase):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+    category: Optional[str] = Field(default=None, max_length=50)
+    is_active: bool = True
+    skip_extraction: bool = False
 
 
 class DashboardJob(BaseModel):
@@ -162,3 +170,5 @@ class DashboardResponse(BaseModel):
     feeds: List[DashboardFeed]
     scheduler: DashboardScheduler
     live_processing_count: Optional[int] = None
+    daily_dates: List[date] = Field(default_factory=list)
+    daily_timezone: str = "UTC"

@@ -17,6 +17,7 @@
     </header>
     <div class="refresh-state"><span id="updated" role="status" aria-live="polite">Loading snapshot…</span>
       <span id="error" role="alert" hidden></span></div>
+    <div class="action-feedback"><span id="action-status" role="status" aria-live="polite"></span><span id="action-error" role="alert" hidden></span></div>
     <section aria-label="Article and feed totals" id="summary" class="cards"></section>
 
     <section class="panel" aria-labelledby="pipeline-title">
@@ -27,13 +28,21 @@
       <details class="explanation"><summary>How these counts work</summary><p class="muted">Download and parsing run together. Awaiting extraction is a stored backlog, not a count of articles currently running. Counts reflect articles currently retained in the database, not lifetime ingestion. Missing content includes null, blank, and literal “None” values. Disabled extraction takes precedence over retry limits.</p></details>
     </section>
 
+    <section class="panel" aria-labelledby="daily-title">
+      <div class="section-heading"><h2 id="daily-title">Articles per day</h2><label class="select-label">Period <select id="daily-range"><option value="7">Last 7 days</option><option value="14">Last 14 days</option><option value="30">Last 30 days</option></select></label></div>
+      <p class="muted">New articles first saved from RSS each day, grouped by feed. Dates use UTC; today is still in progress. Counts reflect retained articles, so cleanup reduces historical totals.</p>
+      <div class="daily-phone"><label class="select-label">Day <select id="daily-day"></select></label><div id="daily-bars"></div></div>
+      <div class="table-scroll daily-desktop" tabindex="0" role="region" aria-label="Articles per feed per UTC day"><table><thead id="daily-head"></thead><tbody id="daily-body"></tbody></table></div>
+      <p id="daily-empty" class="empty" hidden>Add a feed to see daily activity.</p>
+    </section>
+
     <section class="panel feeds-panel" aria-labelledby="feeds-title">
-      <div class="section-heading"><h2 id="feeds-title">RSS feeds</h2><span id="feed-count" class="muted"></span></div>
+      <div class="section-heading"><h2 id="feeds-title">RSS feeds <span id="feed-count" class="muted"></span></h2><button id="add-feed" type="button" data-action-control>Add feed</button></div>
       <p class="muted feed-description">All RSS URLs are combined per feed. Expand details for URLs and fetch information.</p>
       <div id="feed-cards" class="feed-cards"></div>
       <div class="table-scroll desktop-feeds" tabindex="0" role="region" aria-label="RSS feed metrics, scroll horizontally for more columns">
         <table>
-          <thead><tr><th scope="col">Feed / RSS URLs</th><th scope="col">Settings</th><th scope="col">Stored</th><th scope="col">With content</th><th scope="col">Missing</th><th scope="col">Awaiting</th><th scope="col">Disabled</th><th scope="col">Retry limit</th><th scope="col">Not eligible</th><th scope="col">Latest fetch</th><th scope="col">Entries found</th><th scope="col">Valid entries submitted</th><th scope="col">Duration</th><th scope="col">Fetch error</th></tr></thead>
+          <thead><tr><th scope="col">Feed / RSS URLs</th><th scope="col">Settings / Actions</th><th scope="col">Stored</th><th scope="col">With content</th><th scope="col">Missing</th><th scope="col">Awaiting</th><th scope="col">Disabled</th><th scope="col">Retry limit</th><th scope="col">Not eligible</th><th scope="col">Latest fetch</th><th scope="col">Entries found</th><th scope="col">Valid entries submitted</th><th scope="col">Duration</th><th scope="col">Fetch error</th></tr></thead>
           <tbody id="feeds"></tbody>
         </table>
       </div>
@@ -43,10 +52,32 @@
 
     <section class="panel" aria-labelledby="scheduler-title">
       <div class="section-heading"><h2 id="scheduler-title">Scheduler</h2><span id="scheduler-state" class="pill">Loading…</span></div>
+      <div class="scheduler-controls"><button id="scheduler-start" type="button" data-action-control disabled>Start scheduler</button><button id="scheduler-stop" type="button" class="secondary" data-action-control disabled>Stop scheduler</button></div>
       <div id="jobs" class="jobs"></div>
-      <p class="muted">RSS fetching runs every 15 minutes; scheduled extraction checks up to 30 articles every minute. Feed activation controls fetching; existing articles can still be extracted from inactive feeds.</p>
+      <p class="muted">Changes apply to this backend process until restart; startup follows SCHEDULE_ENABLE. Stopping may interrupt running jobs. RSS fetching runs every 15 minutes; extraction checks up to 30 articles every minute. Feed activation controls fetching; existing articles from inactive feeds can still be extracted.</p>
     </section>
-    <footer>Read-only operations dashboard · <a href="/docs">API documentation</a></footer>
+    <footer>Operations dashboard · <a href="/docs">API documentation</a></footer>
   </main>
+  <dialog id="feed-dialog" aria-labelledby="feed-dialog-title">
+    <form id="feed-form">
+      <h2 id="feed-dialog-title">Add feed</h2>
+      <fieldset id="feed-fields" data-action-control>
+        <label>Feed name<input id="feed-name" required maxlength="255" autocomplete="off"></label>
+        <label>Category<input id="feed-category" maxlength="50" autocomplete="off" placeholder="Optional"></label>
+        <label>RSS URLs<textarea id="feed-urls" required rows="4" placeholder="https://example.com/rss&#10;One URL per line"></textarea></label>
+        <label class="check-label"><input id="feed-active" type="checkbox" checked> Fetch automatically</label>
+        <label class="check-label"><input id="feed-extraction" type="checkbox" checked> Extract article content</label>
+        <p class="muted">Manual refresh can fetch an inactive feed. Disabling extraction keeps RSS metadata but skips downloading article content.</p>
+      </fieldset>
+      <p id="feed-form-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions"><button id="delete-feed" type="button" class="danger" data-action-control hidden>Delete source</button><button id="cancel-feed" type="button" class="secondary">Cancel</button><button type="submit" data-action-control>Save feed</button></div>
+    </form>
+  </dialog>
+  <dialog id="delete-dialog" aria-labelledby="delete-title">
+    <h2 id="delete-title">Delete feed source?</h2><p id="delete-description"></p>
+    <p class="muted">Existing articles and fetch logs are kept without a source association. Those articles will no longer appear under a feed, but remain in dashboard totals.</p>
+    <p id="delete-error" class="form-error" role="alert" hidden></p>
+    <div class="dialog-actions"><button id="cancel-delete" type="button" class="secondary">Cancel</button><button id="confirm-delete" type="button" class="danger" data-action-control>Delete source</button></div>
+  </dialog>
 </body>
 </html>

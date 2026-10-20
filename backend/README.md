@@ -32,17 +32,51 @@ The API will be available at http://localhost:8000
 ## Ingestion dashboard
 
 Open `/dashboard` on the backend URL (for example, http://localhost:8000/dashboard).
-The read-only page is served entirely by FastAPI and refreshes every 30 seconds;
+The page is served entirely by FastAPI and refreshes every 30 seconds;
 the checkbox pauses automatic refresh and **Refresh now** requests a new snapshot.
 Failed refreshes retain the previous snapshot and its timestamp. Times are displayed
 in the browser's local timezone. The page and `GET /api/news/dashboard` follow the
-backend's existing unauthenticated access model.
+backend's existing unauthenticated access model, including management controls.
 
 Below 1024px, feeds appear as cards with stored/content/missing counts and the latest
 fetch status. **Feed details** expands URLs, extraction counts, fetch metrics, and
 full error text. Expanded feed details and keyboard focus survive refreshes. Phones
 use a two-column summary grid; desktop retains the detailed feed table, with URLs
 and full fetch errors available through disclosures.
+
+**Articles per day** counts retained articles by their first ingestion timestamp
+(`created_at`), rather than publication date or repeated fetch-log entries. Choose
+7, 14, or 30 days, including the current partial UTC day. Desktop shows a daily
+table; phones show a selectable day's counts. Empty feeds/days display zero.
+Renaming a feed retains its daily history; deleting articles reduces the counts.
+
+Use **Add feed** or a feed's **Edit** button to manage its name, category, RSS URLs
+(one per line), automatic fetching, and content extraction. **Refresh feed** fetches
+RSS metadata immediately, including for an inactive feed; it does not immediately
+extract article content. **Refresh now** only reloads dashboard statistics.
+Deleting a source asks for confirmation and retains its articles and fetch logs
+without a source association. Those articles remain in global totals, but no longer
+appear under a feed. Failed saves keep form inputs; duplicate feed names return 409.
+
+Scheduler **Start** / **Stop** controls change the current backend process only.
+After restart, `SCHEDULE_ENABLE` determines startup behavior. Stopping may interrupt
+running jobs. Restarting the scheduler creates fresh jobs and executors while
+preserving the existing 15-minute RSS / 1-minute extraction schedules.
+
+The dashboard uses these endpoints (feed identifiers are stable numeric IDs):
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/news/dashboard?days=7` | Snapshot with daily dates and per-feed daily counts; 1–30 days supported |
+| POST | `/api/news/dashboard/feeds` | Create a source |
+| PUT | `/api/news/dashboard/feeds/{id}` | Replace name, URL list, category, and fetching/extraction settings |
+| DELETE | `/api/news/dashboard/feeds/{id}` | Remove a source while preserving collected data |
+| POST | `/api/news/dashboard/feeds/{id}/refresh` | Fetch one source and return success/partial/error results |
+| POST | `/api/news/scheduler/start` or `/api/news/scheduler/stop` | Control scheduling at runtime |
+
+Create/update bodies contain `name`, `url` (a nonempty HTTP(S) URL list), optional
+`category`, `is_active`, and `skip_extraction`. Existing feed-management APIs remain
+available. No schema migration is required.
 
 The dashboard includes every configured feed, its RSS URLs and settings, stored
 article counts, latest fetch results, and scheduler configuration/running status
@@ -75,8 +109,8 @@ RSS fetching runs every 15 minutes. Extraction runs every minute, selecting the 
 rules as the dashboard, persists each attempt, and advances retries exactly once for
 failed downloads, empty extraction, or parser exceptions. Blocking downloads/parsing
 run off the API event loop. Feed activation controls fetching; extraction of already
-stored articles from inactive feeds remains eligible. Dashboard refreshes never trigger
-fetching or extraction.
+stored articles from inactive feeds remains eligible. Snapshot refreshes never trigger
+fetching or extraction; **Refresh feed** is an explicit fetch action.
 
 ### Dashboard verification
 

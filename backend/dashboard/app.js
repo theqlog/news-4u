@@ -6,6 +6,11 @@ const date = (value) => value ? new Date(value).toLocaleString() : "Unavailable"
 let refreshing = false;
 let hasSnapshot = false;
 const expandedDetails = new Set();
+let latestSnapshot = null;
+let actionPending = false;
+let editingFeed = null;
+let selectedDay = null;
+let refreshQueued = false;
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -47,6 +52,21 @@ function metric(label, value, attention = false) {
   return item;
 }
 
+function actionButton(label, callback) {
+  const button = element("button", label, "secondary");
+  button.type = "button";
+  button.dataset.actionControl = "";
+  button.disabled = actionPending;
+  button.addEventListener("click", callback);
+  return button;
+}
+
+function feedActions(feed) {
+  const actions = element("div", undefined, "feed-actions");
+  actions.append(actionButton("Refresh feed", () => refreshFeed(feed)), actionButton("Edit", () => editFeed(feed)));
+  return actions;
+}
+
 function mobileFeed(feed) {
   const log = feed.latest_fetch;
   const fetchError = log && (log.error || ["error", "partial"].includes(log.status));
@@ -77,7 +97,56 @@ function mobileFeed(feed) {
   card.append(header, metrics, latest);
   if (log?.error) card.append(element("p", log.error, "error-preview"));
   card.append(details);
+  card.append(feedActions(feed));
   return card;
+}
+
+function dayLabel(day) {
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, {month:"short", day:"numeric", timeZone:"UTC"});
+}
+
+function renderDaily(data) {
+  const dates = data.daily_dates || [];
+  if (!dates.includes(selectedDay)) selectedDay = dates.at(-1);
+  const options = [...dates].reverse().map((day) => {
+    const option = element("option", `${dayLabel(day)}${day === dates.at(-1) ? " · Today" : ""}`);
+    option.value = day;
+    return option;
+  });
+  byId("daily-day").replaceChildren(...options);
+  byId("daily-day").value = selectedDay || "";
+  const header = element("tr");
+  header.append(element("th", "Feed"), ...dates.map((day) => element("th", dayLabel(day))), element("th", "Period total"));
+  const rows = data.feeds.map((feed) => {
+    const row = element("tr");
+    const name = element("th", feed.name);
+    name.scope = "row";
+    const counts = feed.daily_articles || [];
+    row.append(name, ...counts.map((value) => element("td", number(value), value ? "daily-value" : "zero")), element("td", number(counts.reduce((sum, value) => sum + value, 0)), "daily-total"));
+    return row;
+  });
+  byId("daily-head").replaceChildren(header);
+  byId("daily-body").replaceChildren(...rows);
+  byId("daily-empty").hidden = data.feeds.length !== 0;
+  renderDailyBars(data);
+}
+
+function renderDailyBars(data) {
+  const index = (data.daily_dates || []).indexOf(selectedDay);
+  const max = Math.max(1, ...data.feeds.map((feed) => feed.daily_articles?.[index] || 0));
+  const rows = data.feeds.map((feed) => {
+    const value = feed.daily_articles?.[index] || 0;
+    const row = element("div", undefined, "daily-bar-row");
+    const heading = element("div", undefined, "daily-bar-heading");
+    heading.append(element("span", feed.name), element("strong", number(value)));
+    const track = element("div", undefined, "daily-bar-track");
+    const fill = element("div");
+    fill.style.width = `${value / max * 100}%`;
+    track.append(fill);
+    row.append(heading, track);
+    return row;
+  });
+  byId("daily-bars").replaceChildren(...rows);
 }
 
 function render(data) {
@@ -110,6 +179,7 @@ function render(data) {
     name.append(urls);
     const settings = element("td", feed.is_active ? "Active" : "Inactive");
     settings.append(element("span", feed.skip_extraction ? "Extraction disabled" : "Extraction enabled", "subtext"));
+    settings.append(feedActions(feed));
     row.append(name, settings);
     for (const key of ["total", "with_content", "missing_content", "awaiting_extraction", "extraction_disabled", "retry_limit_reached", "not_eligible"]) {
       row.append(element("td", number(feed.articles[key]), feed.articles[key] === 0 ? "zero" : key === "missing_content" ? "attention" : ""));
@@ -153,17 +223,24 @@ function render(data) {
   byId("scheduler-state").textContent = `Configured: ${data.scheduler.enabled ? "enabled" : "disabled"} · ${data.scheduler.scheduler_running ? "Running" : "Stopped"}`;
   byId("jobs").replaceChildren(...jobs);
   byId("updated").textContent = `Last successful refresh: ${date(data.snapshot_at)} · Times shown in your local timezone`;
+  renderDaily(data);
+  latestSnapshot = data;
+  setActionState();
   // Automatic refresh must not drop keyboard focus from an expanded feed summary.
   if (focusedId?.startsWith("feed-")) byId(focusedId)?.focus({ preventScroll: true });
 }
 
-async function refresh() {
-  if (refreshing) return;
+async function refresh(forceAfterCurrent = false) {
+  if (refreshing) {
+    if (forceAfterCurrent === true) refreshQueued = true;
+    return;
+  }
   refreshing = true;
   byId("refresh").disabled = true;
   byId("refresh").textContent = "Refreshing…";
   try {
-    const response = await fetch("/api/news/dashboard", { cache: "no-store", signal: AbortSignal.timeout(20000) });
+    const days = byId("daily-range").value || "7";
+    const response = await fetch(`/api/news/dashboard?days=${encodeURIComponent(days)}`, { cache: "no-store", signal: AbortSignal.timeout(20000) });
     if (!response.ok) throw new Error(`Server returned HTTP ${response.status}`);
     render(await response.json());
     hasSnapshot = true;
@@ -176,9 +253,110 @@ async function refresh() {
     refreshing = false;
     byId("refresh").disabled = false;
     byId("refresh").textContent = "Refresh now";
+    if (refreshQueued) { refreshQueued = false; refresh(); }
   }
 }
 
+function setActionState() {
+  for (const control of document.querySelectorAll("[data-action-control]")) control.disabled = actionPending;
+  const running = latestSnapshot?.scheduler.scheduler_running;
+  byId("scheduler-start").disabled = actionPending || !latestSnapshot || running;
+  byId("scheduler-stop").disabled = actionPending || !latestSnapshot || !running;
+}
+
+async function requestAction(url, method, body) {
+  const options = { method, headers: { "Content-Type": "application/json" } };
+  if (body !== undefined) options.body = JSON.stringify(body);
+  // A fetch across several RSS URLs may take longer than the snapshot timeout.
+  const response = await fetch(url, options);
+  const result = await response.json();
+  if (!response.ok) {
+    const detail = Array.isArray(result.detail) ? result.detail.map((item) => item.msg).join("; ") : result.detail;
+    throw new Error(detail || `Server returned HTTP ${response.status}`);
+  }
+  return result;
+}
+
+async function performAction(message, url, method, body, onSuccess, localError) {
+  if (actionPending) return;
+  actionPending = true;
+  setActionState();
+  byId("action-status").textContent = message;
+  byId("action-error").hidden = true;
+  if (localError) byId(localError).hidden = true;
+  try {
+    const result = await requestAction(url, method, body);
+    byId("action-status").textContent = onSuccess(result);
+    await refresh(true);
+  } catch (error) {
+    byId("action-status").textContent = "Could not confirm the action. Refresh to check its result before retrying.";
+    for (const id of ["action-error", localError].filter(Boolean)) {
+      byId(id).textContent = error.message;
+      byId(id).hidden = false;
+    }
+  } finally {
+    actionPending = false;
+    setActionState();
+  }
+}
+
+function editFeed(feed = null) {
+  editingFeed = feed;
+  byId("feed-dialog-title").textContent = feed ? "Edit feed" : "Add feed";
+  byId("feed-name").value = feed?.name || "";
+  byId("feed-category").value = feed?.category || "";
+  byId("feed-urls").value = feed?.urls.join("\n") || "";
+  byId("feed-active").checked = feed?.is_active ?? true;
+  byId("feed-extraction").checked = !(feed?.skip_extraction ?? false);
+  byId("delete-feed").hidden = !feed;
+  byId("feed-form-error").hidden = true;
+  byId("feed-dialog").showModal();
+}
+
+function refreshFeed(feed) {
+  return performAction(`Fetching ${feed.name}… This may take a minute.`, `/api/news/dashboard/feeds/${feed.id}/refresh`, "POST", undefined, (result) => {
+    if (result.status === "error" || result.status === "partial") {
+      byId("action-error").textContent = result.error || "Some RSS URLs could not be fetched. See feed details.";
+      byId("action-error").hidden = false;
+    }
+    return `${feed.name}: fetch ${result.status}. ${number(result.articles_found || 0)} entries found; ${number(result.articles_processed || 0)} valid entries submitted.`;
+  });
+}
+
+byId("add-feed").addEventListener("click", () => editFeed());
+byId("cancel-feed").addEventListener("click", () => byId("feed-dialog").close());
+byId("feed-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const body = {
+    name: byId("feed-name").value.trim(), category: byId("feed-category").value.trim() || null,
+    url: byId("feed-urls").value.split(/\r?\n/).map((url) => url.trim()).filter(Boolean),
+    is_active: byId("feed-active").checked, skip_extraction: !byId("feed-extraction").checked,
+  };
+  const path = editingFeed ? `/api/news/dashboard/feeds/${editingFeed.id}` : "/api/news/dashboard/feeds";
+  return performAction("Saving feed…", path, editingFeed ? "PUT" : "POST", body, () => {
+    byId("feed-dialog").close();
+    return `${body.name} saved.`;
+  }, "feed-form-error");
+});
+byId("delete-feed").addEventListener("click", () => {
+  byId("delete-description").textContent = `Remove “${editingFeed.name}” and all its RSS URLs?`;
+  byId("delete-error").hidden = true;
+  byId("delete-dialog").showModal();
+});
+byId("cancel-delete").addEventListener("click", () => byId("delete-dialog").close());
+byId("confirm-delete").addEventListener("click", () => performAction("Removing feed…", `/api/news/dashboard/feeds/${editingFeed.id}`, "DELETE", undefined, (result) => {
+  byId("delete-dialog").close();
+  byId("feed-dialog").close();
+  return result.message;
+}, "delete-error"));
+for (const action of ["start", "stop"]) {
+  byId(`scheduler-${action}`).addEventListener("click", () => performAction(`Updating scheduler…`, `/api/news/scheduler/${action}`, "POST", undefined, () => `Scheduler ${action === "start" ? "started" : "stopped"}. This change lasts until backend restart.`));
+}
+byId("daily-range").addEventListener("change", () => refresh(true));
+byId("daily-day").addEventListener("change", () => {
+  selectedDay = byId("daily-day").value;
+  if (latestSnapshot) renderDailyBars(latestSnapshot);
+});
 byId("refresh").addEventListener("click", refresh);
 setInterval(() => { if (byId("auto-refresh").checked) refresh(); }, 30000);
 refresh();

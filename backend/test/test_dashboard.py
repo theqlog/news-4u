@@ -10,7 +10,7 @@ import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 # Allow route/service imports without loading real application credentials.
@@ -31,6 +31,7 @@ from models import Base, FeedFetchLog, NewsArticle, RSSFeed
 from routers.dashboard import router
 from services.dashboard import get_dashboard_snapshot
 from services.processing import extraction_eligible_condition
+from services.rss import RSSService
 from services.scheduler_service import SchedulerService
 
 
@@ -125,7 +126,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             snapshot = self.snapshot()
         finally:
             event.remove(self.engine, "before_cursor_execute", record)
-        self.assertEqual(len(queries), 4)
+        self.assertEqual(len(queries), 5)
         self.assertEqual(snapshot.summary.model_dump(), {
             "total": 12, "with_content": 3, "missing_content": 9,
             "awaiting_extraction": 5, "extraction_disabled": 1,
@@ -267,6 +268,104 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(job.next_run_time is not None for job in snapshot.scheduler.jobs))
         finally:
             self.scheduler.stop()
+
+    def client(self):
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_db] = lambda: self.db
+        return TestClient(app)
+
+    def test_daily_articles_use_created_time_and_utc_midnight(self):
+        feed = self.feed()
+        empty = self.feed("Empty")
+        today = self.now.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.article(feed, created_at=today, published_date=today - timedelta(days=50))
+        self.article(feed, created_at=today - timedelta(microseconds=1))
+        self.article(feed, created_at=today - timedelta(days=6))
+        self.article(feed, created_at=today - timedelta(days=6, microseconds=1))
+        self.article(feed, created_at=today + timedelta(days=1))
+        self.article(None, created_at=today)
+        self.db.commit()
+        # Day grouping must not follow the connection's timezone.
+        self.db.execute(text("SET TIME ZONE 'Pacific/Honolulu'"))
+        snapshot = self.snapshot()
+        rows = {row.id: row for row in snapshot.feeds}
+        self.assertEqual(snapshot.daily_timezone, "UTC")
+        self.assertEqual(snapshot.daily_dates[-1], today.date())
+        self.assertEqual(rows[feed.id].daily_articles, [1, 0, 0, 0, 0, 1, 1])
+        self.assertEqual(rows[empty.id].daily_articles, [0] * 7)
+        self.assertEqual(len(get_dashboard_snapshot(self.db, self.scheduler, self.settings, 30).daily_dates), 30)
+        with self.client() as client:
+            self.assertEqual(client.get("/api/news/dashboard?days=0").status_code, 422)
+            self.assertEqual(client.get("/api/news/dashboard?days=31").status_code, 422)
+            self.assertEqual(len(client.get("/api/news/dashboard?days=14").json()["daily_dates"]), 14)
+
+    def test_feed_create_edit_validation_and_safe_delete(self):
+        body = {"name": " Example / special ", "url": ["https://example.com/rss"] * 2, "category": "News", "is_active": False, "skip_extraction": True}
+        with self.client() as client:
+            response = client.post("/api/news/dashboard/feeds", json=body)
+            self.assertEqual(response.status_code, 201, response.text)
+            created = response.json()
+            feed_id = created["id"]
+            self.assertEqual(created["name"], "Example / special")
+            self.assertEqual(created["url"], ["https://example.com/rss"])
+            self.assertFalse(created["is_active"])
+            self.assertTrue(created["skip_extraction"])
+            self.assertEqual(client.post("/api/news/dashboard/feeds", json=body).status_code, 409)
+            for change in [{"name": "   "}, {"url": []}, {"url": ["not a URL"]}, {"category": "x" * 51}]:
+                self.assertEqual(client.post("/api/news/dashboard/feeds", json={**body, **change}).status_code, 422)
+            edited = {**body, "name": "Renamed", "is_active": True, "skip_extraction": False}
+            self.assertEqual(client.put(f"/api/news/dashboard/feeds/{feed_id}", json=edited).status_code, 200)
+            feed = self.db.get(RSSFeed, feed_id)
+            article = self.article(feed, "Retained content")
+            article_id = article.id
+            log = FeedFetchLog(feed_id=feed_id, status="success")
+            self.db.add(log)
+            self.db.commit()
+            log_id = log.id
+            response = client.delete(f"/api/news/dashboard/feeds/{feed_id}")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.db.expire_all()
+            self.assertIsNone(self.db.get(RSSFeed, feed_id))
+            self.assertIsNone(self.db.get(NewsArticle, article_id).feed_id)
+            self.assertEqual(self.db.get(NewsArticle, article_id).content, "Retained content")
+            self.assertIsNone(self.db.get(FeedFetchLog, log_id).feed_id)
+            self.assertEqual(self.snapshot().summary.total, 1)
+            self.assertEqual(client.delete(f"/api/news/dashboard/feeds/{feed_id}").status_code, 404)
+            self.assertEqual(client.put(f"/api/news/dashboard/feeds/{feed_id}", json=edited).status_code, 404)
+
+    def test_refresh_feed_uses_id_and_reports_partial_results(self):
+        feed = self.feed("Feed / with slash", is_active=False)
+        self.db.commit()
+        result = {"status": "partial", "articles_found": 5, "articles_processed": 3, "execution_time": 100, "error": "One URL offline"}
+        with self.client() as client, patch("routers.dashboard.RSSService.fetch_feed_async", new_callable=AsyncMock, return_value=result) as fetch:
+            response = client.post(f"/api/news/dashboard/feeds/{feed.id}/refresh")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), result)
+            self.assertEqual(fetch.await_args.args[0].id, feed.id)
+            self.assertEqual(client.post("/api/news/dashboard/feeds/999999/refresh").status_code, 404)
+            self.assertEqual(fetch.await_count, 1)
+
+    async def test_repeated_rss_entries_do_not_inflate_daily_counts(self):
+        feed = self.feed()
+        service = RSSService(self.db)
+        entries = [{"title": "Repeated story", "link": "https://example.com/repeated-story"}]
+        await service._process_articles(entries, feed)
+        await service._process_articles(entries, feed)
+        snapshot = self.snapshot()
+        self.assertEqual(snapshot.summary.total, 1)
+        self.assertEqual(sum(snapshot.feeds[0].daily_articles), 1)
+
+    async def test_scheduler_can_stop_and_restart_repeatedly(self):
+        for _ in range(3):
+            previous = self.scheduler.scheduler
+            self.scheduler.start()
+            self.assertIsNot(self.scheduler.scheduler, previous)
+            self.assertEqual(len(self.scheduler.get_job_status()["jobs"]), 2)
+            self.scheduler.stop()
+            await asyncio.sleep(0)  # Allow APScheduler's queued shutdown callback.
+            self.assertFalse(self.scheduler.is_running)
+            self.assertFalse(self.scheduler.scheduler.running)
 
 
 if __name__ == "__main__":

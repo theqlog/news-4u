@@ -8,11 +8,13 @@ const path = require("node:path");
 const source = fs.readFileSync(path.join(__dirname, "../dashboard/app.js"), "utf8");
 
 class Node {
-  constructor(tag) { this.tag = tag; this.children = []; this.events = {}; this.checked = true; this.hidden = false; this.open = false; }
+  constructor(tag) { this.tag = tag; this.children = []; this.events = {}; this.checked = true; this.hidden = false; this.open = false; this.value = ""; this.dataset = {}; this.style = {}; }
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
   addEventListener(type, callback) { this.events[type] = callback; }
   focus() { this.focused = true; }
+  showModal() { this.open = true; }
+  close() { this.open = false; }
   set innerHTML(value) { throw new Error("Unsafe HTML rendering"); }
 }
 
@@ -27,9 +29,9 @@ function texts(node) {
 function fixture() {
   const counts = { total: 1, with_content: 0, missing_content: 1, awaiting_extraction: 1, extraction_disabled: 0, retry_limit_reached: 0, not_eligible: 0 };
   return {
-    snapshot_at: "2026-10-18T12:00:00Z", summary: { ...counts, total_feeds: 1, active_feeds: 1 },
+    snapshot_at: "2026-10-18T12:00:00Z", daily_dates: ["2026-10-17", "2026-10-18"], summary: { ...counts, total_feeds: 1, active_feeds: 1 },
     feeds: [{ id: 1, name: '<img src=x onerror="alert(1)">', urls: ["javascript:alert(1)"],
-      category: "Test", is_active: true, skip_extraction: false, articles: counts,
+      category: "Test", is_active: true, skip_extraction: false, articles: counts, daily_articles: [3, 1],
       latest_fetch: { status: "error", timestamp: null, entries_found: 0, valid_entries_submitted: 0, duration_ms: 0, error: "<script>alert(1)</script>" } }],
     scheduler: { enabled: false, scheduler_running: false, jobs: [] }, live_processing_count: null,
   };
@@ -44,10 +46,16 @@ function harness() {
       const found = descendants(node).find((item) => item.id === id);
       if (found) return found;
     }
-    if (!nodes.has(id)) nodes.set(id, new Node("div"));
+    if (!nodes.has(id)) {
+      const node = new Node("div");
+      if (["add-feed", "feed-fields", "delete-feed", "confirm-delete", "scheduler-start", "scheduler-stop"].includes(id)) node.dataset.actionControl = "";
+      nodes.set(id, node);
+    }
     return nodes.get(id);
   };
-  const document = { getElementById: get, createElement: (tag) => new Node(tag), activeElement: null };
+  const document = { getElementById: get, createElement: (tag) => new Node(tag), activeElement: null,
+    querySelectorAll: () => [...nodes.values()].flatMap(descendants).filter((node) => node.dataset.actionControl !== undefined),
+  };
   vm.runInNewContext(source, {
     document,
     Intl, Date, AbortSignal,
@@ -56,7 +64,7 @@ function harness() {
   });
   return {
     get, requests, document, tick: () => tick(), click: () => get("refresh").events.click(),
-    resolve: (index, body = fixture(), status = 200) => requests[index].resolve({ ok: status === 200, status, json: async () => body }),
+    resolve: (index, body = fixture(), status = 200) => requests[index].resolve({ ok: status >= 200 && status < 300, status, json: async () => body }),
   };
 }
 
@@ -65,7 +73,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 test("initial load, manual refresh, automatic toggle and no overlapping requests", async () => {
   const h = harness();
   assert.equal(h.requests.length, 1);
-  assert.equal(h.requests[0].url, "/api/news/dashboard");
+  assert.equal(h.requests[0].url, "/api/news/dashboard?days=7");
   assert.equal(h.requests[0].options.cache, "no-store");
   assert.equal(h.get("refresh").disabled, true);
   h.tick(); await h.click();
@@ -165,4 +173,100 @@ test("mobile cards show backlog and fetch problems, with complete secondary metr
   assert.match(h.get("feed-cards").children[0].className, /has-backlog/);
   assert.ok(texts(h.get("feed-cards")).includes("Never fetched"));
   assert.match(h.get("fetch-issues").textContent, /No fetch errors/);
+});
+
+test("daily range and selected UTC day update without losing the selected day on refresh", async () => {
+  const h = harness();
+  h.resolve(0); await flush();
+  assert.equal(h.get("daily-day").value, "2026-10-18");
+  assert.ok(texts(h.get("daily-bars")).includes("1"));
+  h.get("daily-day").value = "2026-10-17";
+  h.get("daily-day").events.change();
+  assert.ok(texts(h.get("daily-bars")).includes("3"));
+  h.get("daily-range").value = "30";
+  const changed = h.get("daily-range").events.change();
+  assert.equal(h.requests[1].url, "/api/news/dashboard?days=30");
+  h.resolve(1); await changed;
+  assert.equal(h.get("daily-day").value, "2026-10-17");
+  assert.ok(texts(h.get("daily-body")).includes("4")); // Period total.
+});
+
+test("feed form validates through the API and preserves inputs on failure", async () => {
+  const h = harness();
+  h.resolve(0); await flush();
+  h.get("add-feed").events.click();
+  assert.equal(h.get("feed-dialog").open, true);
+  h.get("feed-name").value = " My source ";
+  h.get("feed-urls").value = "https://example.com/rss\n\nhttps://example.com/tech";
+  h.get("feed-extraction").checked = false;
+  const rejected = h.get("feed-form").events.submit({preventDefault() {}});
+  assert.equal(h.requests[1].options.method, "POST");
+  assert.equal(JSON.parse(h.requests[1].options.body).skip_extraction, true);
+  assert.equal(h.get("add-feed").disabled, true);
+  h.resolve(1, {detail: "Name already exists"}, 409); await rejected;
+  assert.equal(h.get("feed-dialog").open, true);
+  assert.equal(h.get("feed-name").value, " My source ");
+  assert.equal(h.get("feed-form-error").textContent, "Name already exists");
+  const saved = h.get("feed-form").events.submit({preventDefault() {}});
+  h.resolve(2, {id: 2}, 201); await flush();
+  h.resolve(3); await saved;
+  assert.equal(h.get("feed-dialog").open, false);
+  assert.equal(h.get("add-feed").disabled, false);
+  assert.equal(h.get("action-status").textContent, "My source saved.");
+});
+
+test("editing uses stable IDs and deleting requires a separate confirmation", async () => {
+  const h = harness();
+  h.resolve(0); await flush();
+  const edit = descendants(h.get("feed-cards")).find((node) => node.tag === "button" && node.textContent === "Edit");
+  edit.events.click();
+  h.get("feed-name").value = "Renamed / source";
+  const save = h.get("feed-form").events.submit({preventDefault() {}});
+  assert.equal(h.requests[1].url, "/api/news/dashboard/feeds/1");
+  assert.equal(h.requests[1].options.method, "PUT");
+  h.resolve(1, {}); await flush(); h.resolve(2); await save;
+  edit.events.click();
+  h.get("delete-feed").events.click();
+  assert.equal(h.get("delete-dialog").open, true);
+  assert.equal(h.requests.length, 3); // Opening a confirmation sends no delete.
+  h.get("cancel-delete").events.click();
+  assert.equal(h.get("delete-dialog").open, false);
+  h.get("delete-feed").events.click();
+  const deletion = h.get("confirm-delete").events.click();
+  assert.equal(h.requests[3].options.method, "DELETE");
+  assert.equal(h.requests[3].url, "/api/news/dashboard/feeds/1");
+  h.resolve(3, {message:"Removed; articles retained"}); await flush(); h.resolve(4); await deletion;
+  assert.equal(h.get("feed-dialog").open, false);
+});
+
+test("feed refresh reports partial errors, prevents duplicate actions and refreshes metrics", async () => {
+  const h = harness();
+  h.resolve(0); await flush();
+  const button = descendants(h.get("feed-cards")).find((node) => node.tag === "button" && node.textContent === "Refresh feed");
+  const action = button.events.click();
+  await button.events.click();
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.requests[1].url, "/api/news/dashboard/feeds/1/refresh");
+  h.resolve(1, {status:"partial",articles_found:5,articles_processed:3,error:"<script>Offline</script>"}); await flush();
+  h.resolve(2); await action;
+  assert.match(h.get("action-status").textContent, /5 entries found/);
+  assert.equal(h.get("action-error").textContent, "<script>Offline</script>");
+});
+
+test("scheduler start and stop reflect actual refreshed state", async () => {
+  const h = harness();
+  h.resolve(0); await flush();
+  assert.equal(h.get("scheduler-start").disabled, false);
+  assert.equal(h.get("scheduler-stop").disabled, true);
+  const start = h.get("scheduler-start").events.click();
+  assert.equal(h.requests[1].url, "/api/news/scheduler/start");
+  h.resolve(1, {}); await flush();
+  const running = fixture(); running.scheduler.scheduler_running = true;
+  h.resolve(2, running); await start;
+  assert.equal(h.get("scheduler-start").disabled, true);
+  assert.equal(h.get("scheduler-stop").disabled, false);
+  const stop = h.get("scheduler-stop").events.click();
+  assert.equal(h.requests[3].url, "/api/news/scheduler/stop");
+  h.resolve(3, {}); await flush(); h.resolve(4); await stop;
+  assert.equal(h.get("scheduler-start").disabled, false);
 });

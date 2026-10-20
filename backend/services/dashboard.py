@@ -1,8 +1,8 @@
-"""Database aggregates for the read-only ingestion dashboard."""
+"""Database aggregates for the ingestion dashboard."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, case, func
+from sqlalchemy import Date, and_, case, cast, func
 
 from models import FeedFetchLog, NewsArticle, RSSFeed
 from schemas import (
@@ -40,7 +40,17 @@ def article_counts(row):
     return DashboardArticleCounts(**counts)
 
 
-def get_dashboard_snapshot(db, scheduler, settings):
+def get_dashboard_snapshot(db, scheduler, settings, days=7):
+    now = datetime.now(timezone.utc)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start = today - timedelta(days=days - 1)
+    dates = [(start + timedelta(days=index)).date() for index in range(days)]
+    article_day = cast(func.timezone("UTC", NewsArticle.created_at), Date)
+    daily_rows = db.query(NewsArticle.feed_id, article_day.label("day"), func.count(NewsArticle.id).label("count")).filter(
+        NewsArticle.created_at >= start,
+        NewsArticle.created_at < today + timedelta(days=1),
+    ).group_by(NewsArticle.feed_id, article_day).all()
+    daily_counts = {(row.feed_id, row.day): row.count for row in daily_rows}
     columns = article_count_columns(settings.ARTICLE_EXTRACTION_MAX_RETRY)
     # Include orphaned articles in global totals, even though they cannot be extracted.
     totals = db.query(*columns).select_from(NewsArticle).outerjoin(
@@ -70,6 +80,7 @@ def get_dashboard_snapshot(db, scheduler, settings):
             id=feed.id, name=feed.name, urls=feed.url, category=feed.category,
             is_active=bool(feed.is_active), skip_extraction=bool(feed.skip_extraction),
             articles=counts_by_feed.get(feed.id, DashboardArticleCounts()),
+            daily_articles=[daily_counts.get((feed.id, day), 0) for day in dates],
             latest_fetch=DashboardFetch(
                 timestamp=log.fetch_timestamp, status=log.status,
                 entries_found=log.articles_found or 0,
@@ -79,7 +90,8 @@ def get_dashboard_snapshot(db, scheduler, settings):
         ))
 
     return DashboardResponse(
-        snapshot_at=datetime.now(timezone.utc),
+        snapshot_at=now,
+        daily_dates=dates,
         summary=DashboardSummary(
             **article_counts(totals).model_dump(), total_feeds=len(feeds),
             active_feeds=sum(feed.is_active for feed in feeds),

@@ -29,6 +29,9 @@ class SchedulerService:
         print("---- Starting Scheduler Service ----")
         """Start the scheduler."""
         if not self.is_running:
+            # A stopped APScheduler executor cannot be reused. A fresh instance
+            # also isolates an immediately preceding asynchronous shutdown.
+            self.scheduler = AsyncIOScheduler()
             self.scheduler.start()
             self.is_running = True
             logger.info("Scheduler started")
